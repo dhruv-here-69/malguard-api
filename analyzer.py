@@ -6,7 +6,7 @@ import hashlib
 from androguard.misc import AnalyzeAPK
 
 from analysis.sandbox import simulate_file_behavior
-from analysis.url_analysis import analyze_urls
+from analysis.url.url_analysis import analyze_urls
 from analysis.intelligence.ai_engine import classify_threat
 
 
