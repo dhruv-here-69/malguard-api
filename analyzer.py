@@ -5,7 +5,7 @@ import pefile
 import hashlib
 from androguard.misc import AnalyzeAPK
 
-from analysis.sandbox.sangbox_engine import simulate_file_behavior
+from analysis.sandbox.sandbox_engine import simulate_file_behavior
 from analysis.intelligence.ai_engine import classify_threat
 
 
