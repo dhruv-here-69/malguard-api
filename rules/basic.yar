@@ -6,7 +6,6 @@ rule EICAR_Test_File
     condition:
         $eicar
 }
-}
 
 rule Suspicious_PowerShell
 {
