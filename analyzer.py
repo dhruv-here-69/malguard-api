@@ -1,10 +1,34 @@
+import yara
 import pefile
 from androguard.misc import AnalyzeAPK
 
 
-# ==========================
-# APK ANALYZER
-# ==========================
+def yara_scan(path):
+
+    try:
+
+        rules = yara.compile(filepath="rules/basic.yar")
+
+        matches = rules.match(path)
+
+        return [m.rule for m in matches]
+
+    except Exception:
+
+        return []
+
+def analyze_generic_file(path):
+
+    yara_matches = yara_scan(path)
+
+    risk_score = len(yara_matches) * 30
+
+    return {
+        "file_type": "generic",
+        "yara_matches": yara_matches,
+        "risk_score": min(risk_score, 100)
+    }
+
 
 def analyze_apk(path):
 
@@ -58,10 +82,6 @@ def analyze_apk(path):
             "error": str(e)
         }
 
-
-# ==========================
-# EXE ANALYZER
-# ==========================
 
 def analyze_exe(path):
 
