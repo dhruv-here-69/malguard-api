@@ -1,5 +1,9 @@
 from fastapi import FastAPI, UploadFile, File
-from analyzer import analyze_apk, analyze_exe
+from analyzer import (
+    analyze_apk,
+    analyze_exe,
+    analyze_generic_file
+)
 
 import tempfile
 import os
@@ -9,13 +13,17 @@ app = FastAPI(title="MalGuard API")
 
 @app.get("/")
 def home():
-    return {"status": "MalGuard Running"}
+    return {
+        "status": "MalGuard Running"
+    }
 
 
 @app.post("/scan")
 async def scan(file: UploadFile = File(...)):
 
-    extension = os.path.splitext(file.filename)[1].lower()
+    extension = os.path.splitext(
+        file.filename
+    )[1].lower()
 
     with tempfile.NamedTemporaryFile(
         delete=False,
@@ -28,14 +36,25 @@ async def scan(file: UploadFile = File(...)):
 
         path = temp.name
 
-    if extension == ".apk":
+    try:
 
-        return analyze_apk(path)
+        if extension == ".apk":
 
-    elif extension == ".exe":
+            result = analyze_apk(path)
 
-        return analyze_exe(path)
+        elif extension == ".exe":
 
-    return {
-        "error": "Unsupported file type"
-    }
+            result = analyze_exe(path)
+
+        else:
+
+            result = analyze_generic_file(path)
+
+        result["filename"] = file.filename
+
+        return result
+
+    finally:
+
+        if os.path.exists(path):
+            os.remove(path)
