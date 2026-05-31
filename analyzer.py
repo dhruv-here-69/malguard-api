@@ -5,6 +5,8 @@ import pefile
 import hashlib
 from androguard.misc import AnalyzeAPK
 
+from analysis.sandbox import simulate_file_behavior
+from analysis.url_analysis import analyze_urls
 from analysis.intelligence.ai_engine import classify_threat
 
 
@@ -39,7 +41,6 @@ def extract_urls(path):
             content = f.read()
 
         text = content.decode(errors="ignore")
-
         urls = re.findall(r'https?://[^\s\'"<>]+', text)
 
         return list(set(urls))
@@ -88,8 +89,12 @@ def build_response(file_type, sha256, risk_score, extra):
 def analyze_generic_file(path):
 
     sha256 = calculate_sha256(path)
+
     urls = extract_urls(path)
     yara_matches = yara_scan(path)
+
+    sandbox_result = simulate_file_behavior(path)
+    url_result = analyze_urls(urls) if urls else None
 
     ai_result = classify_threat(
         static={
@@ -100,8 +105,8 @@ def analyze_generic_file(path):
                 "urls": urls
             }
         },
-        url_data=None,
-        sandbox_data=None
+        url_data=url_result,
+        sandbox_data=sandbox_result
     )
 
     return build_response(
@@ -110,7 +115,9 @@ def analyze_generic_file(path):
         ai_result["risk_score"],
         {
             "urls": urls,
+            "url_analysis": url_result,
             "yara_matches": yara_matches,
+            "sandbox": sandbox_result,
             "ai_analysis": ai_result
         }
     )
@@ -131,6 +138,7 @@ def analyze_apk(path):
         receivers = a.get_receivers()
 
         yara_matches = yara_scan(path)
+        sandbox_result = simulate_file_behavior(path)
 
         dangerous_permissions = [
             "READ_SMS",
@@ -163,7 +171,7 @@ def analyze_apk(path):
                 }
             },
             url_data=None,
-            sandbox_data=None
+            sandbox_data=sandbox_result
         )
 
         return build_response(
@@ -179,6 +187,7 @@ def analyze_apk(path):
                 "services": services,
                 "receivers": receivers,
                 "yara_matches": yara_matches,
+                "sandbox": sandbox_result,
                 "ai_analysis": ai_result
             }
         )
@@ -205,6 +214,7 @@ def analyze_exe(path):
         suspicious_functions_found = []
 
         yara_matches = yara_scan(path)
+        sandbox_result = simulate_file_behavior(path)
 
         suspicious_dlls = [
             "wininet.dll",
@@ -260,7 +270,7 @@ def analyze_exe(path):
                 }
             },
             url_data=None,
-            sandbox_data=None
+            sandbox_data=sandbox_result
         )
 
         return build_response(
@@ -272,6 +282,7 @@ def analyze_exe(path):
                 "suspicious_imports": suspicious_dlls_found,
                 "suspicious_functions": suspicious_functions_found,
                 "yara_matches": yara_matches,
+                "sandbox": sandbox_result,
                 "ai_analysis": ai_result
             }
         )
