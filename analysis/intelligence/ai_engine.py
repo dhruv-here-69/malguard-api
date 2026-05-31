@@ -1,119 +1,115 @@
-def classify_threat(static, url_data, sandbox_data):
+# ==========================
+# MALGUARD AI THREAT ENGINE
+# ==========================
+
+def classify_threat(static, url_data=None, sandbox_data=None):
+
+    # ==========================
+    # INITIAL STATE
+    # ==========================
 
     score = 0
     reasons = []
     attack_vectors = set()
     mitre = set()
 
-    # =========================
-    # APK SIGNALS
-    # =========================
+    analysis = static.get("analysis", {})
 
-    apk_data = static.get("analysis", {})
+    yara_matches = analysis.get("yara_matches", [])
+    dangerous_permissions = analysis.get("dangerous_permissions", [])
+    suspicious_functions = analysis.get("suspicious_functions", [])
+    urls = analysis.get("urls", [])
 
-    dangerous_perms = apk_data.get("dangerous_permissions", [])
+    # ==========================
+    # STATIC ANALYSIS SCORING
+    # ==========================
 
-    if dangerous_perms:
-        score += len(dangerous_perms) * 12
-        reasons.append("Uses high-risk Android permissions")
+    if yara_matches:
+        score += len(yara_matches) * 35
+        reasons.append("YARA rule matches detected")
+        attack_vectors.add("Known malware signature")
 
-        if "READ_SMS" in dangerous_perms or "RECEIVE_SMS" in dangerous_perms:
-            attack_vectors.add("SMS interception")
-            mitre.add("T1056 - Input Capture")
+    if dangerous_permissions:
+        score += len(dangerous_permissions) * 10
+        reasons.append("Dangerous permissions detected (Android abuse risk)")
+        attack_vectors.add("Privilege abuse")
 
-        if "SYSTEM_ALERT_WINDOW" in dangerous_perms:
-            attack_vectors.add("Overlay phishing")
+    if suspicious_functions:
+        score += len(suspicious_functions) * 15
+        reasons.append("Suspicious API usage detected")
+        attack_vectors.add("Process injection / system manipulation")
 
-        if "BIND_ACCESSIBILITY_SERVICE" in dangerous_perms:
-            attack_vectors.add("Device takeover via accessibility abuse")
+    # ==========================
+    # SANDBOX BEHAVIOR SCORING
+    # ==========================
 
-    # =========================
-    # EXE SIGNALS
-    # =========================
+    if sandbox_data:
 
-    suspicious_funcs = apk_data.get("suspicious_functions", [])
+        if sandbox_data.get("process_activity"):
+            score += 20
+            reasons.append("Suspicious process activity observed")
+            attack_vectors.add("Process execution anomalies")
 
-    if suspicious_funcs:
-        score += len(suspicious_funcs) * 10
-        reasons.append("Suspicious Windows API usage detected")
+        if sandbox_data.get("network_activity"):
+            score += 30
+            reasons.append("Unusual network activity detected")
+            attack_vectors.add("Command & Control communication")
 
-        attack_vectors.add("Process injection / persistence")
+        score += sandbox_data.get("behavior_score", 0) * 0.4
 
-        mitre.add("T1055 - Process Injection")
+    # ==========================
+    # URL INTELLIGENCE SCORING (YOUR ADDED BLOCK)
+    # ==========================
 
-    # =========================
-    # YARA SIGNALS
-    # =========================
+    if url_data:
+        avg = url_data.get("average_risk", 0)
 
-    yara = apk_data.get("yara_matches", [])
+        score += avg * 0.3
 
-    if yara:
-        score += len(yara) * 18
-        reasons.append("Known malware signatures detected")
+        if avg > 70:
+            reasons.append(
+                "High-risk URLs detected (possible C2 or phishing infrastructure)"
+            )
+            attack_vectors.add("Phishing / Command & Control communication")
+            mitre.add("T1566 - Phishing")
 
-    # =========================
-    # URL SIGNALS
-    # =========================
-
-    urls = apk_data.get("urls", [])
-
-    if urls:
-        score += len(urls) * 8
-        reasons.append("External communication detected")
-
-        attack_vectors.add("Command & Control (C2) communication")
-
-    # =========================
-    # SANDBOX SIGNALS
-    # =========================
-
-    if sandbox_data and sandbox_data.get("sandbox_run"):
-        score += 15
-        reasons.append("Behavior triggered sandbox execution")
-
-    # =========================
+    # ==========================
     # FINAL NORMALIZATION
-    # =========================
+    # ==========================
 
-    score = min(score, 100)
+    score = min(int(score), 100)
 
     if score < 30:
-        level = "LOW"
+        risk_level = "LOW"
     elif score < 60:
-        level = "MEDIUM"
+        risk_level = "MEDIUM"
     elif score < 85:
-        level = "HIGH"
+        risk_level = "HIGH"
     else:
-        level = "CRITICAL"
+        risk_level = "CRITICAL"
 
-    # =========================
-    # THREAT CLASSIFICATION
-    # =========================
+    # ==========================
+    # ATTACK CLASSIFICATION
+    # ==========================
 
-    if "READ_SMS" in dangerous_perms and "SYSTEM_ALERT_WINDOW" in dangerous_perms:
-        threat_class = "Android Banking Trojan"
-
-    elif "BIND_ACCESSIBILITY_SERVICE" in dangerous_perms:
-        threat_class = "Accessibility-Based Spyware"
-
-    elif suspicious_funcs:
-        threat_class = "Windows Malware / Trojan"
-
-    elif yara:
-        threat_class = "Known Malware Family"
-
+    if score >= 85:
+        threat_class = "Severe Malware / Banking Trojan"
+    elif score >= 60:
+        threat_class = "Suspicious / Potential Malware"
+    elif score >= 30:
+        threat_class = "Low Risk / Heuristic Match"
     else:
-        threat_class = "Suspicious Application"
+        threat_class = "Clean / Safe"
 
-    # =========================
-    # OUTPUT
-    # =========================
+    # ==========================
+    # FINAL OUTPUT
+    # ==========================
 
     return {
         "risk_score": score,
-        "risk_level": level,
+        "risk_level": risk_level,
         "threat_class": threat_class,
-        "ai_summary": " ".join(reasons),
+        "reasons": reasons,
         "attack_vectors": list(attack_vectors),
-        "mitre_mapping": list(mitre)
+        "mitre_attack": list(mitre)
     }
