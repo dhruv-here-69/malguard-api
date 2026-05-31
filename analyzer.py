@@ -3,8 +3,9 @@ import re
 import yara
 import pefile
 import hashlib
-import math
 from androguard.misc import AnalyzeAPK
+
+from analysis.intelligence.ai_engine import classify_threat
 
 
 # ==========================
@@ -39,10 +40,7 @@ def extract_urls(path):
 
         text = content.decode(errors="ignore")
 
-        urls = re.findall(
-            r'https?://[^\s\'"<>]+',
-            text
-        )
+        urls = re.findall(r'https?://[^\s\'"<>]+', text)
 
         return list(set(urls))
 
@@ -54,16 +52,16 @@ def yara_scan(path):
     try:
         rules = yara.compile(filepath=RULES_FILE)
         matches = rules.match(path)
-        return [match.rule for match in matches]
+        return [m.rule for m in matches]
     except Exception:
         return []
 
 
 # ==========================
-# UNIFIED RESPONSE FORMAT
+# RESPONSE NORMALIZER
 # ==========================
 
-def build_response(file_type, sha256, risk_score, extra_data):
+def build_response(file_type, sha256, risk_score, extra):
 
     if risk_score < 30:
         level = "LOW"
@@ -79,7 +77,7 @@ def build_response(file_type, sha256, risk_score, extra_data):
         "sha256": sha256,
         "risk_score": risk_score,
         "risk_level": level,
-        "analysis": extra_data
+        "analysis": extra
     }
 
 
@@ -89,22 +87,31 @@ def build_response(file_type, sha256, risk_score, extra_data):
 
 def analyze_generic_file(path):
 
-    yara_matches = yara_scan(path)
-    urls = extract_urls(path)
     sha256 = calculate_sha256(path)
+    urls = extract_urls(path)
+    yara_matches = yara_scan(path)
 
-    risk_score = 0
-    risk_score += len(yara_matches) * 40
-    risk_score += len(urls) * 5
-    risk_score = min(risk_score, 100)
+    ai_result = classify_threat(
+        static={
+            "analysis": {
+                "dangerous_permissions": [],
+                "suspicious_functions": [],
+                "yara_matches": yara_matches,
+                "urls": urls
+            }
+        },
+        url_data=None,
+        sandbox_data=None
+    )
 
     return build_response(
         "generic",
         sha256,
-        risk_score,
+        ai_result["risk_score"],
         {
             "urls": urls,
-            "yara_matches": yara_matches
+            "yara_matches": yara_matches,
+            "ai_analysis": ai_result
         }
     )
 
@@ -140,24 +147,29 @@ def analyze_apk(path):
             "BIND_ACCESSIBILITY_SERVICE"
         ]
 
-        found_permissions = []
-
-        for permission in permissions:
-            for danger in dangerous_permissions:
-                if danger in permission:
-                    found_permissions.append(danger)
+        found_permissions = [
+            d for p in permissions for d in dangerous_permissions if d in p
+        ]
 
         sha256 = calculate_sha256(path)
 
-        permission_score = len(found_permissions) * 15
-        yara_score = len(yara_matches) * 40
-
-        risk_score = min(permission_score + yara_score, 100)
+        ai_result = classify_threat(
+            static={
+                "analysis": {
+                    "dangerous_permissions": found_permissions,
+                    "suspicious_functions": [],
+                    "yara_matches": yara_matches,
+                    "urls": []
+                }
+            },
+            url_data=None,
+            sandbox_data=None
+        )
 
         return build_response(
             "apk",
             sha256,
-            risk_score,
+            ai_result["risk_score"],
             {
                 "app_name": a.get_app_name(),
                 "package": a.get_package(),
@@ -166,12 +178,12 @@ def analyze_apk(path):
                 "activities": activities,
                 "services": services,
                 "receivers": receivers,
-                "yara_matches": yara_matches
+                "yara_matches": yara_matches,
+                "ai_analysis": ai_result
             }
         )
 
     except Exception as e:
-
         return {
             "file_type": "apk",
             "error": str(e)
@@ -231,34 +243,40 @@ def analyze_exe(path):
                 for imp in entry.imports:
 
                     if imp.name:
+                        fn = imp.name.decode(errors="ignore")
 
-                        function_name = imp.name.decode(errors="ignore")
-
-                        if function_name in suspicious_functions:
-                            suspicious_functions_found.append(function_name)
+                        if fn in suspicious_functions:
+                            suspicious_functions_found.append(fn)
 
         sha256 = calculate_sha256(path)
 
-        dll_score = len(suspicious_dlls_found) * 10
-        function_score = len(suspicious_functions_found) * 20
-        yara_score = len(yara_matches) * 40
-
-        risk_score = min(dll_score + function_score + yara_score, 100)
+        ai_result = classify_threat(
+            static={
+                "analysis": {
+                    "dangerous_permissions": [],
+                    "suspicious_functions": suspicious_functions_found,
+                    "yara_matches": yara_matches,
+                    "urls": []
+                }
+            },
+            url_data=None,
+            sandbox_data=None
+        )
 
         return build_response(
             "exe",
             sha256,
-            risk_score,
+            ai_result["risk_score"],
             {
                 "imports": dlls,
                 "suspicious_imports": suspicious_dlls_found,
                 "suspicious_functions": suspicious_functions_found,
-                "yara_matches": yara_matches
+                "yara_matches": yara_matches,
+                "ai_analysis": ai_result
             }
         )
 
     except Exception as e:
-
         return {
             "file_type": "exe",
             "error": str(e)
