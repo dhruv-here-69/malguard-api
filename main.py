@@ -117,7 +117,7 @@ def is_private_or_internal_host(domain: str):
             or ip_obj.is_reserved
         )
     except Exception:
-        return True
+        return False
 
 
 def check_redirects(url: str):
