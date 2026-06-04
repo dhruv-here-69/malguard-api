@@ -4,6 +4,5 @@ python-multipart
 androguard
 pefile
 yara-python
-oletools
-pdfplumber
 requests
+psutil
