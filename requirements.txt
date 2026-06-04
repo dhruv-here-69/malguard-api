@@ -6,3 +6,4 @@ pefile
 yara-python
 requests
 psutil
+python-whois
