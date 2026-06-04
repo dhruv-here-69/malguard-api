@@ -424,10 +424,22 @@ def analyze_url_safety(raw_url: str):
         score += 60
         findings.append("Google Safe Browsing flagged this URL")
 
+    # If the domain does not resolve, avoid overclaiming confirmed maliciousness.
     if not domain_is_resolvable and score >= 60:
         score = 50
         findings.append(
             "Risk capped because domain is unreachable; no live malicious content confirmed"
+        )
+
+    # Critical should require external confirmation or internal/private infrastructure.
+    # Heuristics-only URLs can be HIGH, but should not become CRITICAL.
+    if (
+        not safe_browsing.get("safe_browsing_hit")
+        and score > 80
+    ):
+        score = 80
+        findings.append(
+            "Risk capped at HIGH because no external threat feed confirmed maliciousness"
         )
 
     score = min(int(score), 100)
@@ -435,9 +447,6 @@ def analyze_url_safety(raw_url: str):
     risk_level = get_risk_level(score)
 
     if safe_browsing.get("safe_browsing_hit"):
-        category = "Phishing URL"
-
-    elif score >= 85:
         category = "Phishing URL"
 
     elif score >= 60:
