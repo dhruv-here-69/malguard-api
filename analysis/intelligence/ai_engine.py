@@ -1,12 +1,4 @@
-# ==========================
-# MALGUARD AI THREAT ENGINE
-# ==========================
-
 def classify_threat(static, url_data=None, sandbox_data=None):
-
-    # ==========================
-    # INITIAL STATE
-    # ==========================
 
     score = 0
     reasons = []
@@ -20,10 +12,6 @@ def classify_threat(static, url_data=None, sandbox_data=None):
     suspicious_functions = analysis.get("suspicious_functions", [])
     urls = analysis.get("urls", [])
 
-    # ==========================
-    # STATIC ANALYSIS SCORING
-    # ==========================
-
     if yara_matches:
         score += len(yara_matches) * 35
         reasons.append("YARA rule matches detected")
@@ -31,51 +19,40 @@ def classify_threat(static, url_data=None, sandbox_data=None):
 
     if dangerous_permissions:
         score += len(dangerous_permissions) * 10
-        reasons.append("Dangerous permissions detected (Android abuse risk)")
-        attack_vectors.add("Privilege abuse")
+        reasons.append("Dangerous Android permissions detected")
+        attack_vectors.add("Permission abuse")
 
     if suspicious_functions:
         score += len(suspicious_functions) * 15
         reasons.append("Suspicious API usage detected")
         attack_vectors.add("Process injection / system manipulation")
 
-    # ==========================
-    # SANDBOX BEHAVIOR SCORING
-    # ==========================
+    if urls:
+        score += min(len(urls) * 5, 20)
+        reasons.append("Embedded URLs detected")
+        attack_vectors.add("Possible external communication")
 
     if sandbox_data:
-
-        if sandbox_data.get("process_activity"):
+        if sandbox_data.get("process_spawned"):
             score += 20
             reasons.append("Suspicious process activity observed")
             attack_vectors.add("Process execution anomalies")
 
         if sandbox_data.get("network_activity"):
             score += 30
-            reasons.append("Unusual network activity detected")
-            attack_vectors.add("Command & Control communication")
+            reasons.append("Network activity observed")
+            attack_vectors.add("Command and Control communication")
 
-        score += sandbox_data.get("behavior_score", 0) * 0.4
-
-    # ==========================
-    # URL INTELLIGENCE SCORING (YOUR ADDED BLOCK)
-    # ==========================
+        score += sandbox_data.get("behavior_score", 0) * 0.2
 
     if url_data:
         avg = url_data.get("average_risk", 0)
-
         score += avg * 0.3
 
         if avg > 70:
-            reasons.append(
-                "High-risk URLs detected (possible C2 or phishing infrastructure)"
-            )
-            attack_vectors.add("Phishing / Command & Control communication")
+            reasons.append("High-risk URLs detected")
+            attack_vectors.add("Phishing / Command and Control")
             mitre.add("T1566 - Phishing")
-
-    # ==========================
-    # FINAL NORMALIZATION
-    # ==========================
 
     score = min(int(score), 100)
 
@@ -88,10 +65,6 @@ def classify_threat(static, url_data=None, sandbox_data=None):
     else:
         risk_level = "CRITICAL"
 
-    # ==========================
-    # ATTACK CLASSIFICATION
-    # ==========================
-
     if score >= 85:
         threat_class = "Severe Malware / Banking Trojan"
     elif score >= 60:
@@ -100,10 +73,6 @@ def classify_threat(static, url_data=None, sandbox_data=None):
         threat_class = "Low Risk / Heuristic Match"
     else:
         threat_class = "Clean / Safe"
-
-    # ==========================
-    # FINAL OUTPUT
-    # ==========================
 
     return {
         "risk_score": score,
