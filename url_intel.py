@@ -5,11 +5,16 @@ import ipaddress
 import requests
 import whois
 
+from bs4 import BeautifulSoup
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 
 GOOGLE_SAFE_BROWSING_API_KEY = os.getenv("GOOGLE_SAFE_BROWSING_API_KEY")
+
+OPENPHISH_FEED_URL = "https://openphish.com/feed.txt"
+
+MAX_HTML_BYTES = 1024 * 1024  # 1 MB
 
 
 SUSPICIOUS_KEYWORDS = [
@@ -53,7 +58,23 @@ SUSPICIOUS_TLDS = [
 ]
 
 
-OPENPHISH_FEED_URL = "https://openphish.com/feed.txt"
+FINANCIAL_KEYWORDS = [
+    "loan",
+    "bank",
+    "upi",
+    "wallet",
+    "payment",
+    "credit",
+    "debit",
+    "kyc",
+    "aadhaar",
+    "pan",
+    "otp",
+    "refund",
+    "cashback",
+    "investment",
+    "double money"
+]
 
 
 def get_risk_level(score: int):
@@ -302,6 +323,215 @@ def get_domain_age(domain: str):
         }
 
 
+def fetch_page_content(url: str):
+    try:
+        response = requests.get(
+            url,
+            timeout=8,
+            allow_redirects=True,
+            stream=True,
+            headers={
+                "User-Agent": "Mozilla/5.0 MalGuardAI URL Scanner"
+            }
+        )
+
+        content_type = response.headers.get(
+            "Content-Type",
+            ""
+        ).lower()
+
+        if "text/html" not in content_type:
+            return {
+                "available": False,
+                "status_code": response.status_code,
+                "content_type": content_type,
+                "error": "Response is not HTML content"
+            }
+
+        downloaded = 0
+        chunks = []
+
+        for chunk in response.iter_content(chunk_size=8192):
+            if not chunk:
+                continue
+
+            downloaded += len(chunk)
+
+            if downloaded > MAX_HTML_BYTES:
+                break
+
+            chunks.append(chunk)
+
+        html = b"".join(chunks).decode(
+            errors="ignore"
+        )
+
+        return {
+            "available": True,
+            "status_code": response.status_code,
+            "content_type": content_type,
+            "html": html[:MAX_HTML_BYTES]
+        }
+
+    except Exception as e:
+        return {
+            "available": False,
+            "status_code": None,
+            "content_type": None,
+            "error": str(e)
+        }
+
+
+def analyze_page_content(url: str):
+    page = fetch_page_content(url)
+
+    result = {
+        "available": page.get("available", False),
+        "status_code": page.get("status_code"),
+        "content_type": page.get("content_type"),
+        "signals": [],
+        "score": 0
+    }
+
+    if not page.get("available"):
+        result["error"] = page.get("error")
+        return result
+
+    html = page.get("html", "")
+    soup = BeautifulSoup(html, "html.parser")
+
+    text = soup.get_text(" ", strip=True).lower()
+
+    inputs = soup.find_all("input")
+    forms = soup.find_all("form")
+    iframes = soup.find_all("iframe")
+    scripts = soup.find_all("script")
+    links = soup.find_all("a")
+
+    password_inputs = []
+
+    for input_tag in inputs:
+        input_type = (
+            input_tag.get("type", "") or ""
+        ).lower()
+
+        input_name = (
+            input_tag.get("name", "") or ""
+        ).lower()
+
+        input_placeholder = (
+            input_tag.get("placeholder", "") or ""
+        ).lower()
+
+        combined = (
+            input_type
+            + " "
+            + input_name
+            + " "
+            + input_placeholder
+        )
+
+        if input_type == "password":
+            password_inputs.append(input_tag)
+
+        if "otp" in combined:
+            result["score"] += 25
+            result["signals"].append(
+                "OTP input field detected"
+            )
+
+        if "password" in combined:
+            result["score"] += 25
+            result["signals"].append(
+                "Password input field detected"
+            )
+
+        if "card" in combined or "cvv" in combined:
+            result["score"] += 25
+            result["signals"].append(
+                "Payment card input field detected"
+            )
+
+    if password_inputs:
+        result["score"] += 25
+        result["signals"].append(
+            "Login/password form detected"
+        )
+
+    if forms:
+        result["score"] += 10
+        result["signals"].append(
+            "HTML form detected"
+        )
+
+    for form in forms:
+        action = (
+            form.get("action", "") or ""
+        ).lower()
+
+        if action and not action.startswith(("https://", "/")):
+            result["score"] += 15
+            result["signals"].append(
+                "Suspicious form action detected"
+            )
+
+    if len(iframes) > 0:
+        result["score"] += 10
+        result["signals"].append(
+            "Iframe usage detected"
+        )
+
+    financial_hits = []
+
+    for keyword in FINANCIAL_KEYWORDS:
+        if keyword in text:
+            financial_hits.append(keyword)
+
+    if financial_hits:
+        result["score"] += min(
+            len(financial_hits) * 5,
+            25
+        )
+        result["signals"].append(
+            "Financial keywords detected: "
+            + ", ".join(financial_hits[:10])
+        )
+
+    apk_links = []
+
+    for link in links:
+        href = (
+            link.get("href", "") or ""
+        ).lower()
+
+        if href.endswith(".apk"):
+            apk_links.append(href)
+
+        if href.endswith(".exe"):
+            apk_links.append(href)
+
+    if apk_links:
+        result["score"] += 30
+        result["signals"].append(
+            "Executable/APK download link detected"
+        )
+
+    if len(scripts) > 15:
+        result["score"] += 10
+        result["signals"].append(
+            "High JavaScript usage detected"
+        )
+
+    result["score"] = min(result["score"], 100)
+
+    if not result["signals"]:
+        result["signals"].append(
+            "No strong phishing content indicators detected"
+        )
+
+    return result
+
+
 def analyze_url_safety(raw_url: str):
     url = normalize_url(raw_url)
 
@@ -327,6 +557,7 @@ def analyze_url_safety(raw_url: str):
             "safe_browsing": {},
             "openphish": {},
             "whois": {},
+            "page_analysis": {},
             "recommendation": "Do not open this URL."
         }
 
@@ -349,6 +580,7 @@ def analyze_url_safety(raw_url: str):
             "safe_browsing": {},
             "openphish": {},
             "whois": {},
+            "page_analysis": {},
             "recommendation": "Do not open this URL."
         }
 
@@ -369,6 +601,7 @@ def analyze_url_safety(raw_url: str):
             "safe_browsing": {},
             "openphish": {},
             "whois": {},
+            "page_analysis": {},
             "recommendation": "Block this URL. Internal/private URL scanning is not allowed."
         }
 
@@ -492,10 +725,22 @@ def analyze_url_safety(raw_url: str):
         score += 60
         findings.append("OpenPhish flagged this URL")
 
+    page_analysis = analyze_page_content(url)
+
+    page_score = page_analysis.get("score", 0)
+
+    if page_score > 0:
+        score += min(page_score * 0.5, 35)
+
+        for signal in page_analysis.get("signals", []):
+            findings.append("Page content: " + signal)
+
     threat_feed_confirmed = (
         safe_browsing.get("safe_browsing_hit")
         or openphish.get("openphish_hit")
     )
+
+    content_confirmed = page_score >= 50
 
     if not domain_is_resolvable and score >= 60:
         score = 50
@@ -505,11 +750,12 @@ def analyze_url_safety(raw_url: str):
 
     if (
         not threat_feed_confirmed
+        and not content_confirmed
         and score > 80
     ):
         score = 80
         findings.append(
-            "Risk capped at HIGH because no external threat feed confirmed maliciousness"
+            "Risk capped at HIGH because no external threat feed or page-content evidence confirmed maliciousness"
         )
 
     score = min(int(score), 100)
@@ -517,6 +763,9 @@ def analyze_url_safety(raw_url: str):
     risk_level = get_risk_level(score)
 
     if threat_feed_confirmed:
+        category = "Phishing URL"
+
+    elif content_confirmed:
         category = "Phishing URL"
 
     elif score >= 60:
@@ -562,5 +811,6 @@ def analyze_url_safety(raw_url: str):
         "safe_browsing": safe_browsing,
         "openphish": openphish,
         "whois": whois_info,
+        "page_analysis": page_analysis,
         "recommendation": recommendation
     }
