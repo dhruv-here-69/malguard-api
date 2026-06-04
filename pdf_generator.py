@@ -1,5 +1,6 @@
 import tempfile
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
@@ -124,6 +125,121 @@ def paragraph_list(title, items, elements, heading_style, normal_style):
                 normal_style
             )
         )
+
+
+def get_domain_from_indicators(indicators):
+    urls = list_text(indicators.get("urls"))
+
+    if not urls or urls[0] == "insufficient evidence":
+        return "N/A"
+
+    try:
+        parsed = urlparse(urls[0])
+        if parsed.netloc:
+            return parsed.netloc
+
+        parsed = urlparse("https://" + urls[0])
+        return parsed.netloc or "N/A"
+
+    except Exception:
+        return "N/A"
+
+
+def get_first_url(indicators):
+    urls = list_text(indicators.get("urls"))
+
+    if not urls or urls[0] == "insufficient evidence":
+        return "N/A"
+
+    return ", ".join(urls)
+
+
+def create_risk_meter(score_num, threat_level, normal_style):
+    score_num = max(0, min(score_num, 100))
+
+    total_width = 480
+    filled_width = max(1, int((score_num / 100) * total_width))
+    empty_width = max(1, total_width - filled_width)
+
+    color = severity_color(threat_level)
+
+    score_label = Paragraph(
+        f"<b>Risk Score:</b> {score_num}/100",
+        normal_style
+    )
+
+    filled_bar = Table(
+        [[""]],
+        colWidths=[filled_width],
+        rowHeights=[14]
+    )
+
+    filled_bar.setStyle(
+        TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), color),
+            ("BOX", (0, 0), (-1, -1), 0, color),
+        ])
+    )
+
+    empty_bar = Table(
+        [[""]],
+        colWidths=[empty_width],
+        rowHeights=[14]
+    )
+
+    empty_bar.setStyle(
+        TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#e5e7eb")),
+            ("BOX", (0, 0), (-1, -1), 0, colors.HexColor("#e5e7eb")),
+        ])
+    )
+
+    bar_row = Table(
+        [[filled_bar, empty_bar]],
+        colWidths=[filled_width, empty_width],
+        rowHeights=[14]
+    )
+
+    bar_row.setStyle(
+        TableStyle([
+            ("BOX", (0, 0), (-1, -1), 0.7, colors.HexColor("#cbd5e1")),
+            ("PADDING", (0, 0), (-1, -1), 0),
+        ])
+    )
+
+    scale = Table(
+        [["0", "25", "50", "75", "100"]],
+        colWidths=[96, 96, 96, 96, 96]
+    )
+
+    scale.setStyle(
+        TableStyle([
+            ("TEXTCOLOR", (0, 0), (-1, -1), colors.HexColor("#475569")),
+            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+            ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), 8),
+            ("PADDING", (0, 0), (-1, -1), 2),
+        ])
+    )
+
+    meter = Table(
+        [
+            [score_label],
+            [bar_row],
+            [scale]
+        ],
+        colWidths=[480]
+    )
+
+    meter.setStyle(
+        TableStyle([
+            ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#d1d5db")),
+            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f8fafc")),
+            ("PADDING", (0, 0), (-1, -1), 8),
+        ])
+    )
+
+    return meter
 
 
 def generate_pdf_report(data):
@@ -281,6 +397,8 @@ def generate_pdf_report(data):
         ["Field", "Value"],
         ["Report ID", report_id],
         ["Generated At", now],
+        ["Classification", "Security Internal"],
+        ["Report Type", "Automated Threat Intelligence Report"],
         ["Scan Type", scan_type],
         ["Category", category],
         ["Engine", "MalGuard AI Threat Intelligence Engine v1"]
@@ -313,13 +431,11 @@ def generate_pdf_report(data):
     )
 
     if scan_type.lower() == "url":
-        urls = list_text(indicators.get("urls"))
-
         target_data = [
             ["Field", "Value"],
             ["Target Type", "URL"],
-            ["Scanned URL", ", ".join(urls)],
-            ["Domain / Host", safe(data.get("domain"), "Provided in backend result")],
+            ["Scanned URL", get_first_url(indicators)],
+            ["Domain / Host", get_domain_from_indicators(indicators)],
             ["Analysis Mode", "URL reputation, WHOIS, page-content and threat-feed analysis"]
         ]
 
@@ -515,7 +631,7 @@ def generate_pdf_report(data):
         )
 
     # ==========================
-    # RISK METER
+    # RISK VISUALIZATION
     # ==========================
 
     try:
@@ -524,44 +640,6 @@ def generate_pdf_report(data):
     except Exception:
         score_num = 0
 
-    filled_blocks = max(
-        0,
-        min(
-            int(score_num / 5),
-            20
-        )
-    )
-
-    empty_blocks = 20 - filled_blocks
-
-    risk_meter_data = [
-        [
-            Paragraph(
-                f"<b>Risk Meter:</b> {score_num}/100",
-                normal_style
-            )
-        ],
-        [
-            Paragraph(
-                f"{'█' * filled_blocks}{'░' * empty_blocks}",
-                normal_style
-            )
-        ]
-    ]
-
-    risk_meter = Table(
-        risk_meter_data,
-        colWidths=[480]
-    )
-
-    risk_meter.setStyle(
-        TableStyle([
-            ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#d1d5db")),
-            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f8fafc")),
-            ("PADDING", (0, 0), (-1, -1), 8),
-        ])
-    )
-
     elements.append(
         Paragraph(
             "Risk Visualization",
@@ -569,7 +647,13 @@ def generate_pdf_report(data):
         )
     )
 
-    elements.append(risk_meter)
+    elements.append(
+        create_risk_meter(
+            score_num,
+            threat_level,
+            normal_style
+        )
+    )
 
     # ==========================
     # TECHNICAL ANALYSIS
