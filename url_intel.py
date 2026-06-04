@@ -3,6 +3,9 @@ import re
 import socket
 import ipaddress
 import requests
+import whois
+
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 
@@ -10,26 +13,56 @@ GOOGLE_SAFE_BROWSING_API_KEY = os.getenv("GOOGLE_SAFE_BROWSING_API_KEY")
 
 
 SUSPICIOUS_KEYWORDS = [
-    "login", "verify", "secure", "account", "bank", "update",
-    "signin", "password", "otp", "wallet", "payment", "kyc",
-    "refund", "claim", "bonus", "free", "gift", "reset",
-    "loan", "cash", "reward", "prize"
+    "login",
+    "verify",
+    "secure",
+    "account",
+    "bank",
+    "update",
+    "signin",
+    "password",
+    "otp",
+    "wallet",
+    "payment",
+    "kyc",
+    "refund",
+    "claim",
+    "bonus",
+    "free",
+    "gift",
+    "reset",
+    "loan",
+    "cash",
+    "reward",
+    "prize"
 ]
 
 
 SUSPICIOUS_TLDS = [
-    ".xyz", ".top", ".click", ".tk", ".ml", ".ga", ".cf",
-    ".gq", ".buzz", ".work", ".zip"
+    ".xyz",
+    ".top",
+    ".click",
+    ".tk",
+    ".ml",
+    ".ga",
+    ".cf",
+    ".gq",
+    ".buzz",
+    ".work",
+    ".zip"
 ]
 
 
 def get_risk_level(score: int):
     if score < 30:
         return "LOW"
+
     if score < 60:
         return "MEDIUM"
+
     if score < 85:
         return "HIGH"
+
     return "CRITICAL"
 
 
@@ -46,6 +79,7 @@ def is_ip_address(value: str):
     try:
         ipaddress.ip_address(value)
         return True
+
     except Exception:
         return False
 
@@ -54,6 +88,7 @@ def domain_resolves(domain: str):
     try:
         socket.gethostbyname(domain)
         return True
+
     except Exception:
         return False
 
@@ -135,7 +170,9 @@ def check_google_safe_browsing(url: str):
                 "URL"
             ],
             "threatEntries": [
-                {"url": url}
+                {
+                    "url": url
+                }
             ]
         }
     }
@@ -165,6 +202,47 @@ def check_google_safe_browsing(url: str):
         }
 
 
+def get_domain_age(domain: str):
+    try:
+        info = whois.whois(domain)
+
+        creation_date = info.creation_date
+
+        if isinstance(creation_date, list):
+            creation_date = creation_date[0]
+
+        if not creation_date:
+            return {
+                "available": False,
+                "domain_age_days": None,
+                "creation_date": None,
+                "error": "Creation date not available"
+            }
+
+        if creation_date.tzinfo is None:
+            creation_date = creation_date.replace(
+                tzinfo=timezone.utc
+            )
+
+        now = datetime.now(timezone.utc)
+
+        age_days = (now - creation_date).days
+
+        return {
+            "available": True,
+            "domain_age_days": age_days,
+            "creation_date": creation_date.isoformat()
+        }
+
+    except Exception as e:
+        return {
+            "available": False,
+            "domain_age_days": None,
+            "creation_date": None,
+            "error": str(e)
+        }
+
+
 def analyze_url_safety(raw_url: str):
     url = normalize_url(raw_url)
 
@@ -183,9 +261,12 @@ def analyze_url_safety(raw_url: str):
             "category": "Suspicious URL",
             "url": url,
             "domain": None,
-            "findings": ["URL does not use HTTP/HTTPS"],
+            "findings": [
+                "URL does not use HTTP/HTTPS"
+            ],
             "redirect_info": {},
             "safe_browsing": {},
+            "whois": {},
             "recommendation": "Do not open this URL."
         }
 
@@ -201,9 +282,12 @@ def analyze_url_safety(raw_url: str):
             "category": "Suspicious URL",
             "url": url,
             "domain": None,
-            "findings": ["No valid domain found"],
+            "findings": [
+                "No valid domain found"
+            ],
             "redirect_info": {},
             "safe_browsing": {},
+            "whois": {},
             "recommendation": "Do not open this URL."
         }
 
@@ -214,16 +298,20 @@ def analyze_url_safety(raw_url: str):
             "sha256": None,
             "risk_score": 90,
             "risk_level": "CRITICAL",
-            "category": "Blocked internal/private URL",
+            "category": "Command & Control Infrastructure",
             "url": url,
             "domain": domain,
-            "findings": ["URL resolves to private/internal infrastructure"],
+            "findings": [
+                "URL resolves to private/internal infrastructure"
+            ],
             "redirect_info": {},
             "safe_browsing": {},
+            "whois": {},
             "recommendation": "Block this URL. Internal/private URL scanning is not allowed."
         }
 
     path = parsed.path.lower()
+
     domain_parts = domain.split(".")
     domain_name = domain_parts[0] if domain_parts else ""
 
@@ -244,12 +332,16 @@ def analyze_url_safety(raw_url: str):
     for keyword in SUSPICIOUS_KEYWORDS:
         if keyword in url.lower():
             score += 8
-            findings.append(f"Suspicious keyword detected: {keyword}")
+            findings.append(
+                f"Suspicious keyword detected: {keyword}"
+            )
 
     for tld in SUSPICIOUS_TLDS:
         if domain.endswith(tld):
             score += 20
-            findings.append(f"Suspicious top-level domain detected: {tld}")
+            findings.append(
+                f"Suspicious top-level domain detected: {tld}"
+            )
 
     if len(domain_name) <= 5:
         score += 15
@@ -265,7 +357,9 @@ def analyze_url_safety(raw_url: str):
 
     if "@" in url:
         score += 25
-        findings.append("URL contains @ symbol, commonly used in deception")
+        findings.append(
+            "URL contains @ symbol, commonly used in deception"
+        )
 
     if re.search(r"%[0-9a-fA-F]{2}", url):
         score += 10
@@ -293,8 +387,36 @@ def analyze_url_safety(raw_url: str):
         score += 20
         findings.append("Multiple redirects detected")
 
-    if redirect_info.get("final_url") and redirect_info["final_url"] != url:
+    if (
+        redirect_info.get("final_url")
+        and redirect_info["final_url"] != url
+    ):
         findings.append("URL redirects to another location")
+
+    whois_info = get_domain_age(domain)
+
+    if whois_info.get("available"):
+        age_days = whois_info.get("domain_age_days")
+
+        if age_days is not None:
+            if age_days <= 7:
+                score += 30
+                findings.append(
+                    "Very newly registered domain detected"
+                )
+
+            elif age_days <= 30:
+                score += 20
+                findings.append(
+                    "Recently registered domain detected"
+                )
+
+            elif age_days <= 90:
+                score += 10
+                findings.append("Young domain detected")
+
+    else:
+        findings.append("WHOIS domain age unavailable")
 
     safe_browsing = check_google_safe_browsing(url)
 
@@ -309,28 +431,43 @@ def analyze_url_safety(raw_url: str):
         )
 
     score = min(int(score), 100)
+
     risk_level = get_risk_level(score)
 
     if safe_browsing.get("safe_browsing_hit"):
-        category = "Malicious URL"
+        category = "Phishing URL"
+
     elif score >= 85:
-        category = "Critical phishing or malicious URL"
+        category = "Phishing URL"
+
     elif score >= 60:
-        category = "Likely phishing or malicious URL"
+        category = "Phishing URL"
+
     elif score >= 30:
         category = "Suspicious URL"
+
     else:
-        category = "Likely benign URL"
+        category = "Benign URL"
 
     if not findings:
         findings.append("No strong malicious URL indicators detected")
 
     if risk_level in ["HIGH", "CRITICAL"]:
-        recommendation = "Do not open this URL. Block it and investigate the domain."
+        recommendation = (
+            "Do not open this URL. Block it and investigate the domain."
+        )
+
     elif risk_level == "MEDIUM":
-        recommendation = "Open only in an isolated browser or sandbox. Validate the source before proceeding."
+        recommendation = (
+            "Open only in an isolated browser or sandbox. "
+            "Validate the source before proceeding."
+        )
+
     else:
-        recommendation = "No strong malicious indicators found. Continue normal monitoring."
+        recommendation = (
+            "No strong malicious indicators found. "
+            "Continue normal monitoring."
+        )
 
     return {
         "scan_type": "url",
@@ -344,5 +481,6 @@ def analyze_url_safety(raw_url: str):
         "findings": findings,
         "redirect_info": redirect_info,
         "safe_browsing": safe_browsing,
+        "whois": whois_info,
         "recommendation": recommendation
     }
