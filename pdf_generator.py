@@ -17,6 +17,7 @@ from reportlab.platypus import (
 def safe(value, default="N/A"):
     if value is None or value == "":
         return default
+
     return str(value)
 
 
@@ -32,9 +33,11 @@ def list_text(items):
 
 def bool_badge(value):
     if value is True:
-        return "Detected"
+        return "DETECTED"
+
     if value is False:
-        return "Not Detected"
+        return "NOT DETECTED"
+
     return "N/A"
 
 
@@ -56,6 +59,24 @@ def severity_color(level):
     return colors.HexColor("#374151")
 
 
+def final_action_text(level):
+    level = safe(level).lower()
+
+    if level == "critical":
+        return "IMMEDIATE ACTION REQUIRED"
+
+    if level == "high":
+        return "BLOCK AND INVESTIGATE"
+
+    if level == "medium":
+        return "REVIEW AND MONITOR"
+
+    if level == "low":
+        return "MONITOR / ALLOW IF TRUSTED"
+
+    return "ANALYST REVIEW REQUIRED"
+
+
 def build_table(data, col_widths=None, header=True):
     table = Table(
         data,
@@ -63,7 +84,7 @@ def build_table(data, col_widths=None, header=True):
         repeatRows=1 if header else 0
     )
 
-    styles = [
+    table_styles = [
         ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#d1d5db")),
         ("PADDING", (0, 0), (-1, -1), 7),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
@@ -71,23 +92,30 @@ def build_table(data, col_widths=None, header=True):
     ]
 
     if header:
-        styles += [
+        table_styles += [
             ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#111827")),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
             ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
         ]
+
     else:
-        styles += [
+        table_styles += [
             ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#e5e7eb")),
             ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
         ]
 
-    table.setStyle(TableStyle(styles))
+    table.setStyle(TableStyle(table_styles))
+
     return table
 
 
 def paragraph_list(title, items, elements, heading_style, normal_style):
-    elements.append(Paragraph(title, heading_style))
+    elements.append(
+        Paragraph(
+            title,
+            heading_style
+        )
+    )
 
     for item in list_text(items):
         elements.append(
@@ -167,6 +195,9 @@ def generate_pdf_report(data):
     confidence = safe(data.get("confidence_score"))
     risk_score = safe(data.get("risk_score"))
 
+    indicators = data.get("indicators", {})
+    intel = data.get("url_intelligence", {})
+
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     report_id = f"MG-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
 
@@ -228,14 +259,16 @@ def generate_pdf_report(data):
 
     sev_color = severity_color(threat_level)
 
-    banner.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), sev_color),
-        ("TEXTCOLOR", (0, 0), (-1, -1), colors.white),
-        ("PADDING", (0, 0), (-1, -1), 12),
-        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("BOX", (0, 0), (-1, -1), 1, sev_color),
-    ]))
+    banner.setStyle(
+        TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), sev_color),
+            ("TEXTCOLOR", (0, 0), (-1, -1), colors.white),
+            ("PADDING", (0, 0), (-1, -1), 12),
+            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("BOX", (0, 0), (-1, -1), 1, sev_color),
+        ])
+    )
 
     elements.append(banner)
     elements.append(Spacer(1, 14))
@@ -253,14 +286,69 @@ def generate_pdf_report(data):
         ["Engine", "MalGuard AI Threat Intelligence Engine v1"]
     ]
 
-    elements.append(Paragraph("Report Metadata", heading_style))
-    elements.append(build_table(metadata, [150, 330], header=True))
+    elements.append(
+        Paragraph(
+            "Report Metadata",
+            heading_style
+        )
+    )
+
+    elements.append(
+        build_table(
+            metadata,
+            [150, 330],
+            header=True
+        )
+    )
+
+    # ==========================
+    # SCAN TARGET
+    # ==========================
+
+    elements.append(
+        Paragraph(
+            "Scan Target",
+            heading_style
+        )
+    )
+
+    if scan_type.lower() == "url":
+        urls = list_text(indicators.get("urls"))
+
+        target_data = [
+            ["Field", "Value"],
+            ["Target Type", "URL"],
+            ["Scanned URL", ", ".join(urls)],
+            ["Domain / Host", safe(data.get("domain"), "Provided in backend result")],
+            ["Analysis Mode", "URL reputation, WHOIS, page-content and threat-feed analysis"]
+        ]
+
+    else:
+        target_data = [
+            ["Field", "Value"],
+            ["Target Type", "File"],
+            ["File Type", scan_type],
+            ["Analysis Mode", "Static analysis, YARA detection, sandbox heuristics and AI assessment"]
+        ]
+
+    elements.append(
+        build_table(
+            target_data,
+            [150, 330],
+            header=True
+        )
+    )
 
     # ==========================
     # ANALYST VERDICT
     # ==========================
 
-    elements.append(Paragraph("Analyst Verdict", heading_style))
+    elements.append(
+        Paragraph(
+            "Analyst Verdict",
+            heading_style
+        )
+    )
 
     verdict = (
         f"This scan was classified as <b>{threat_level}</b> with a risk score of "
@@ -269,7 +357,12 @@ def generate_pdf_report(data):
         f"and AI-assisted SOC analysis."
     )
 
-    elements.append(Paragraph(verdict, normal_style))
+    elements.append(
+        Paragraph(
+            verdict,
+            normal_style
+        )
+    )
 
     # ==========================
     # EXECUTIVE SUMMARY
@@ -283,8 +376,20 @@ def generate_pdf_report(data):
         ["Risk Score", f"{risk_score}/100"]
     ]
 
-    elements.append(Paragraph("Executive Summary", heading_style))
-    elements.append(build_table(summary_data, [160, 320], header=False))
+    elements.append(
+        Paragraph(
+            "Executive Summary",
+            heading_style
+        )
+    )
+
+    elements.append(
+        build_table(
+            summary_data,
+            [160, 320],
+            header=False
+        )
+    )
 
     # ==========================
     # KEY FINDINGS
@@ -307,10 +412,8 @@ def generate_pdf_report(data):
     )
 
     # ==========================
-    # IOCs
+    # IOC TABLE
     # ==========================
-
-    indicators = data.get("indicators", {})
 
     ioc_data = [
         ["Indicator Type", "Values"],
@@ -321,16 +424,26 @@ def generate_pdf_report(data):
         ["URLs", ", ".join(list_text(indicators.get("urls")))]
     ]
 
-    elements.append(Paragraph("Indicators of Compromise", heading_style))
-    elements.append(build_table(ioc_data, [140, 340], header=True))
+    elements.append(
+        Paragraph(
+            "Indicators of Compromise",
+            heading_style
+        )
+    )
+
+    elements.append(
+        build_table(
+            ioc_data,
+            [140, 340],
+            header=True
+        )
+    )
 
     # ==========================
     # URL INTELLIGENCE
     # ==========================
 
     if scan_type.lower() == "url":
-        intel = data.get("url_intelligence", {})
-
         intel_data = [
             ["Signal", "Value"],
             ["Google Safe Browsing", bool_badge(intel.get("google_safe_browsing"))],
@@ -343,8 +456,63 @@ def generate_pdf_report(data):
             ["Page Signals", ", ".join(list_text(intel.get("page_signals")))]
         ]
 
-        elements.append(Paragraph("URL Threat Intelligence", heading_style))
-        elements.append(build_table(intel_data, [170, 310], header=True))
+        elements.append(
+            Paragraph(
+                "URL Threat Intelligence",
+                heading_style
+            )
+        )
+
+        elements.append(
+            build_table(
+                intel_data,
+                [170, 310],
+                header=True
+            )
+        )
+
+        # ==========================
+        # THREAT INTELLIGENCE SOURCES
+        # ==========================
+
+        sources = [
+            ["Detection Source", "Result"],
+            [
+                "Google Safe Browsing",
+                "DETECTED" if intel.get("google_safe_browsing") else "NOT DETECTED"
+            ],
+            [
+                "OpenPhish",
+                "DETECTED" if intel.get("openphish_hit") else "NOT DETECTED"
+            ],
+            [
+                "Page Content Analysis",
+                "DETECTED" if int(intel.get("page_content_score") or 0) > 0 else "NO SIGNALS"
+            ],
+            [
+                "WHOIS Intelligence",
+                "AVAILABLE" if int(intel.get("domain_age_days") or 0) > 0 else "UNAVAILABLE"
+            ],
+            [
+                "MalGuard AI Engine",
+                "ACTIVE"
+            ]
+        ]
+
+        elements.append(
+            Paragraph(
+                "Threat Intelligence Sources",
+                heading_style
+            )
+        )
+
+        elements.append(
+            build_table(
+                sources,
+                [220, 260],
+                header=True
+            )
+        )
 
     # ==========================
     # RISK METER
@@ -352,11 +520,19 @@ def generate_pdf_report(data):
 
     try:
         score_num = int(float(risk_score))
+
     except Exception:
         score_num = 0
 
-    filled = max(0, min(score_num, 100))
-    empty = 100 - filled
+    filled_blocks = max(
+        0,
+        min(
+            int(score_num / 5),
+            20
+        )
+    )
+
+    empty_blocks = 20 - filled_blocks
 
     risk_meter_data = [
         [
@@ -367,7 +543,7 @@ def generate_pdf_report(data):
         ],
         [
             Paragraph(
-                f"{'█' * int(filled / 5)}{'░' * int(empty / 5)}",
+                f"{'█' * filled_blocks}{'░' * empty_blocks}",
                 normal_style
             )
         ]
@@ -378,20 +554,34 @@ def generate_pdf_report(data):
         colWidths=[480]
     )
 
-    risk_meter.setStyle(TableStyle([
-        ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#d1d5db")),
-        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f8fafc")),
-        ("PADDING", (0, 0), (-1, -1), 8),
-    ]))
+    risk_meter.setStyle(
+        TableStyle([
+            ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#d1d5db")),
+            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f8fafc")),
+            ("PADDING", (0, 0), (-1, -1), 8),
+        ])
+    )
 
-    elements.append(Paragraph("Risk Visualization", heading_style))
+    elements.append(
+        Paragraph(
+            "Risk Visualization",
+            heading_style
+        )
+    )
+
     elements.append(risk_meter)
 
     # ==========================
     # TECHNICAL ANALYSIS
     # ==========================
 
-    elements.append(Paragraph("Technical Analysis", heading_style))
+    elements.append(
+        Paragraph(
+            "Technical Analysis",
+            heading_style
+        )
+    )
+
     elements.append(
         Paragraph(
             safe(data.get("explanation")),
@@ -400,10 +590,49 @@ def generate_pdf_report(data):
     )
 
     # ==========================
+    # FINAL RECOMMENDATION BANNER
+    # ==========================
+
+    elements.append(
+        Paragraph(
+            "Final Analyst Recommendation",
+            heading_style
+        )
+    )
+
+    recommendation_banner = Table(
+        [[
+            Paragraph(
+                f"<b>{final_action_text(threat_level)}</b><br/>Threat Level: {threat_level} | Risk Score: {risk_score}/100",
+                normal_style
+            )
+        ]],
+        colWidths=[480]
+    )
+
+    recommendation_banner.setStyle(
+        TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), severity_color(threat_level)),
+            ("TEXTCOLOR", (0, 0), (-1, -1), colors.white),
+            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+            ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"),
+            ("PADDING", (0, 0), (-1, -1), 14),
+        ])
+    )
+
+    elements.append(recommendation_banner)
+
+    # ==========================
     # RECOMMENDED ACTION
     # ==========================
 
-    elements.append(Paragraph("Recommended Action", heading_style))
+    elements.append(
+        Paragraph(
+            "Recommended Action",
+            heading_style
+        )
+    )
+
     elements.append(
         Paragraph(
             safe(data.get("recommended_action")),
@@ -441,7 +670,14 @@ def generate_pdf_report(data):
 
     elements.append(
         Paragraph(
-            "Generated by MalGuard AI • Security Operations Intelligence Report",
+            "MalGuard AI Threat Intelligence Platform",
+            small_style
+        )
+    )
+
+    elements.append(
+        Paragraph(
+            f"Report ID: {report_id} • Generated: {now}",
             small_style
         )
     )
