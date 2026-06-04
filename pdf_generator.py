@@ -18,27 +18,34 @@ from reportlab.platypus import (
 def safe(value, default="N/A"):
     if value is None or value == "":
         return default
-
     return str(value)
 
 
 def list_text(items):
     if not items:
         return ["insufficient evidence"]
-
     if isinstance(items, list):
         return items
-
     return [str(items)]
+
+
+def join_items(items):
+    return ", ".join(list_text(items))
 
 
 def bool_badge(value):
     if value is True:
         return "DETECTED"
-
     if value is False:
         return "NOT DETECTED"
+    return "N/A"
 
+
+def yes_no(value):
+    if value is True:
+        return "YES"
+    if value is False:
+        return "NO"
     return "N/A"
 
 
@@ -47,13 +54,10 @@ def severity_color(level):
 
     if level == "critical":
         return colors.HexColor("#7f1d1d")
-
     if level == "high":
         return colors.HexColor("#dc2626")
-
     if level == "medium":
         return colors.HexColor("#f59e0b")
-
     if level == "low":
         return colors.HexColor("#16a34a")
 
@@ -65,29 +69,55 @@ def final_action_text(level):
 
     if level == "critical":
         return "IMMEDIATE ACTION REQUIRED"
-
     if level == "high":
         return "BLOCK AND INVESTIGATE"
-
     if level == "medium":
         return "REVIEW AND MONITOR"
-
     if level == "low":
         return "MONITOR / ALLOW IF TRUSTED"
 
     return "ANALYST REVIEW REQUIRED"
 
 
-def build_table(data, col_widths=None, header=True):
+def make_para(value, style):
+    return Paragraph(
+        safe(value).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"),
+        style
+    )
+
+
+def build_table(data, col_widths=None, header=True, cell_style=None):
+    if cell_style is None:
+        styles = getSampleStyleSheet()
+        cell_style = ParagraphStyle(
+            "CellStyle",
+            parent=styles["BodyText"],
+            fontSize=8.5,
+            leading=11,
+            wordWrap="CJK"
+        )
+
+    wrapped_data = []
+
+    for row in data:
+        wrapped_row = []
+
+        for cell in row:
+            wrapped_row.append(
+                make_para(cell, cell_style)
+            )
+
+        wrapped_data.append(wrapped_row)
+
     table = Table(
-        data,
-        colWidths=col_widths or [160, 320],
+        wrapped_data,
+        colWidths=col_widths or [150, 330],
         repeatRows=1 if header else 0
     )
 
     table_styles = [
-        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#d1d5db")),
-        ("PADDING", (0, 0), (-1, -1), 7),
+        ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#d1d5db")),
+        ("PADDING", (0, 0), (-1, -1), 6),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("TEXTCOLOR", (0, 0), (-1, -1), colors.HexColor("#111827")),
     ]
@@ -98,7 +128,6 @@ def build_table(data, col_widths=None, header=True):
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
             ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
         ]
-
     else:
         table_styles += [
             ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#e5e7eb")),
@@ -106,7 +135,6 @@ def build_table(data, col_widths=None, header=True):
         ]
 
     table.setStyle(TableStyle(table_styles))
-
     return table
 
 
@@ -135,6 +163,7 @@ def get_domain_from_indicators(indicators):
 
     try:
         parsed = urlparse(urls[0])
+
         if parsed.netloc:
             return parsed.netloc
 
@@ -157,9 +186,15 @@ def get_first_url(indicators):
 def create_risk_meter(score_num, threat_level, normal_style):
     score_num = max(0, min(score_num, 100))
 
-    total_width = 480
-    filled_width = max(1, int((score_num / 100) * total_width))
-    empty_width = max(1, total_width - filled_width)
+    total_width = 440
+    filled_width = int((score_num / 100) * total_width)
+    empty_width = total_width - filled_width
+
+    if filled_width < 1:
+        filled_width = 1
+
+    if empty_width < 1:
+        empty_width = 1
 
     color = severity_color(threat_level)
 
@@ -168,48 +203,24 @@ def create_risk_meter(score_num, threat_level, normal_style):
         normal_style
     )
 
-    filled_bar = Table(
-        [[""]],
-        colWidths=[filled_width],
-        rowHeights=[14]
-    )
-
-    filled_bar.setStyle(
-        TableStyle([
-            ("BACKGROUND", (0, 0), (-1, -1), color),
-            ("BOX", (0, 0), (-1, -1), 0, color),
-        ])
-    )
-
-    empty_bar = Table(
-        [[""]],
-        colWidths=[empty_width],
-        rowHeights=[14]
-    )
-
-    empty_bar.setStyle(
-        TableStyle([
-            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#e5e7eb")),
-            ("BOX", (0, 0), (-1, -1), 0, colors.HexColor("#e5e7eb")),
-        ])
-    )
-
-    bar_row = Table(
-        [[filled_bar, empty_bar]],
+    bar = Table(
+        [["", ""]],
         colWidths=[filled_width, empty_width],
-        rowHeights=[14]
+        rowHeights=[12]
     )
 
-    bar_row.setStyle(
+    bar.setStyle(
         TableStyle([
-            ("BOX", (0, 0), (-1, -1), 0.7, colors.HexColor("#cbd5e1")),
+            ("BACKGROUND", (0, 0), (0, 0), color),
+            ("BACKGROUND", (1, 0), (1, 0), colors.HexColor("#e5e7eb")),
+            ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#cbd5e1")),
             ("PADDING", (0, 0), (-1, -1), 0),
         ])
     )
 
     scale = Table(
         [["0", "25", "50", "75", "100"]],
-        colWidths=[96, 96, 96, 96, 96]
+        colWidths=[88, 88, 88, 88, 88]
     )
 
     scale.setStyle(
@@ -225,10 +236,10 @@ def create_risk_meter(score_num, threat_level, normal_style):
     meter = Table(
         [
             [score_label],
-            [bar_row],
+            [bar],
             [scale]
         ],
-        colWidths=[480]
+        colWidths=[460]
     )
 
     meter.setStyle(
@@ -236,6 +247,7 @@ def create_risk_meter(score_num, threat_level, normal_style):
             ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#d1d5db")),
             ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f8fafc")),
             ("PADDING", (0, 0), (-1, -1), 8),
+            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
         ])
     )
 
@@ -292,7 +304,8 @@ def generate_pdf_report(data):
         parent=styles["BodyText"],
         fontSize=10,
         leading=14,
-        textColor=colors.HexColor("#111827")
+        textColor=colors.HexColor("#111827"),
+        wordWrap="CJK"
     )
 
     small_style = ParagraphStyle(
@@ -313,13 +326,10 @@ def generate_pdf_report(data):
 
     indicators = data.get("indicators", {})
     intel = data.get("url_intelligence", {})
+    file_info = data.get("file_intelligence", {})
 
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     report_id = f"MG-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
-
-    # ==========================
-    # HEADER
-    # ==========================
 
     elements.append(
         Paragraph(
@@ -336,7 +346,6 @@ def generate_pdf_report(data):
     )
 
     elements.append(Spacer(1, 10))
-
     elements.append(
         HRFlowable(
             width="100%",
@@ -344,12 +353,7 @@ def generate_pdf_report(data):
             color=colors.HexColor("#cbd5e1")
         )
     )
-
     elements.append(Spacer(1, 12))
-
-    # ==========================
-    # SEVERITY BANNER
-    # ==========================
 
     banner_data = [
         [
@@ -389,10 +393,6 @@ def generate_pdf_report(data):
     elements.append(banner)
     elements.append(Spacer(1, 14))
 
-    # ==========================
-    # REPORT METADATA
-    # ==========================
-
     metadata = [
         ["Field", "Value"],
         ["Report ID", report_id],
@@ -404,31 +404,10 @@ def generate_pdf_report(data):
         ["Engine", "MalGuard AI Threat Intelligence Engine v1"]
     ]
 
-    elements.append(
-        Paragraph(
-            "Report Metadata",
-            heading_style
-        )
-    )
+    elements.append(Paragraph("Report Metadata", heading_style))
+    elements.append(build_table(metadata, [150, 330], header=True))
 
-    elements.append(
-        build_table(
-            metadata,
-            [150, 330],
-            header=True
-        )
-    )
-
-    # ==========================
-    # SCAN TARGET
-    # ==========================
-
-    elements.append(
-        Paragraph(
-            "Scan Target",
-            heading_style
-        )
-    )
+    elements.append(Paragraph("Scan Target", heading_style))
 
     if scan_type.lower() == "url":
         target_data = [
@@ -443,28 +422,15 @@ def generate_pdf_report(data):
         target_data = [
             ["Field", "Value"],
             ["Target Type", "File"],
-            ["File Type", scan_type],
+            ["Filename", safe(file_info.get("filename"), "N/A")],
+            ["File Type", safe(file_info.get("file_type"), scan_type)],
+            ["SHA256", safe(file_info.get("sha256"), "N/A")],
             ["Analysis Mode", "Static analysis, YARA detection, sandbox heuristics and AI assessment"]
         ]
 
-    elements.append(
-        build_table(
-            target_data,
-            [150, 330],
-            header=True
-        )
-    )
+    elements.append(build_table(target_data, [150, 330], header=True))
 
-    # ==========================
-    # ANALYST VERDICT
-    # ==========================
-
-    elements.append(
-        Paragraph(
-            "Analyst Verdict",
-            heading_style
-        )
-    )
+    elements.append(Paragraph("Analyst Verdict", heading_style))
 
     verdict = (
         f"This scan was classified as <b>{threat_level}</b> with a risk score of "
@@ -480,10 +446,6 @@ def generate_pdf_report(data):
         )
     )
 
-    # ==========================
-    # EXECUTIVE SUMMARY
-    # ==========================
-
     summary_data = [
         ["Scan Type", scan_type],
         ["Threat Level", threat_level],
@@ -492,24 +454,8 @@ def generate_pdf_report(data):
         ["Risk Score", f"{risk_score}/100"]
     ]
 
-    elements.append(
-        Paragraph(
-            "Executive Summary",
-            heading_style
-        )
-    )
-
-    elements.append(
-        build_table(
-            summary_data,
-            [160, 320],
-            header=False
-        )
-    )
-
-    # ==========================
-    # KEY FINDINGS
-    # ==========================
+    elements.append(Paragraph("Executive Summary", heading_style))
+    elements.append(build_table(summary_data, [160, 320], header=False))
 
     paragraph_list(
         "Key Findings",
@@ -527,37 +473,52 @@ def generate_pdf_report(data):
         normal_style
     )
 
-    # ==========================
-    # IOC TABLE
-    # ==========================
-
     ioc_data = [
         ["Indicator Type", "Values"],
-        ["Permissions", ", ".join(list_text(indicators.get("permissions")))],
-        ["DLL Imports", ", ".join(list_text(indicators.get("dll_imports")))],
-        ["API Calls", ", ".join(list_text(indicators.get("api_calls")))],
-        ["YARA Matches", ", ".join(list_text(indicators.get("yara_matches")))],
-        ["URLs", ", ".join(list_text(indicators.get("urls")))]
+        ["Permissions", join_items(indicators.get("permissions"))],
+        ["DLL Imports", join_items(indicators.get("dll_imports"))],
+        ["API Calls", join_items(indicators.get("api_calls"))],
+        ["YARA Matches", join_items(indicators.get("yara_matches"))],
+        ["URLs", join_items(indicators.get("urls"))]
     ]
 
-    elements.append(
-        Paragraph(
-            "Indicators of Compromise",
-            heading_style
-        )
-    )
+    elements.append(Paragraph("Indicators of Compromise", heading_style))
+    elements.append(build_table(ioc_data, [130, 350], header=True))
 
-    elements.append(
-        build_table(
-            ioc_data,
-            [140, 340],
-            header=True
-        )
-    )
+    if scan_type.lower() == "file":
+        file_intel_data = [
+            ["Signal", "Value"],
+            ["Filename", safe(file_info.get("filename"), "N/A")],
+            ["File Type", safe(file_info.get("file_type"), "N/A")],
+            ["SHA256", safe(file_info.get("sha256"), "N/A")],
+            ["YARA Matches", join_items(indicators.get("yara_matches"))],
+            ["Suspicious DLL Imports", join_items(indicators.get("dll_imports"))],
+            ["Suspicious API Calls", join_items(indicators.get("api_calls"))],
+            ["Sandbox Executed", yes_no(file_info.get("sandbox_executed"))],
+            ["Sandbox Network Activity", yes_no(file_info.get("sandbox_network_activity"))],
+            ["Sandbox Process Spawned", yes_no(file_info.get("sandbox_process_spawned"))],
+            ["Sandbox File Changes", join_items(file_info.get("sandbox_file_changes"))]
+        ]
 
-    # ==========================
-    # URL INTELLIGENCE
-    # ==========================
+        elements.append(Paragraph("File Intelligence", heading_style))
+        elements.append(build_table(file_intel_data, [160, 320], header=True))
+
+        sources = [
+            ["Detection Source", "Result"],
+            [
+                "YARA Engine",
+                "DETECTED" if indicators.get("yara_matches") and indicators.get("yara_matches") != ["insufficient evidence"] else "NOT DETECTED"
+            ],
+            [
+                "Static Import Analysis",
+                "DETECTED" if indicators.get("api_calls") and indicators.get("api_calls") != ["insufficient evidence"] else "NO STRONG SIGNALS"
+            ],
+            ["Sandbox Heuristics", "ACTIVE"],
+            ["MalGuard AI Engine", "ACTIVE"]
+        ]
+
+        elements.append(Paragraph("File Detection Sources", heading_style))
+        elements.append(build_table(sources, [220, 260], header=True))
 
     if scan_type.lower() == "url":
         intel_data = [
@@ -569,103 +530,33 @@ def generate_pdf_report(data):
             ["Page Content Score", safe(intel.get("page_content_score"))],
             ["Redirect Count", safe(intel.get("redirect_count"))],
             ["HTTP Status", safe(intel.get("http_status"))],
-            ["Page Signals", ", ".join(list_text(intel.get("page_signals")))]
+            ["Page Signals", join_items(intel.get("page_signals"))]
         ]
 
-        elements.append(
-            Paragraph(
-                "URL Threat Intelligence",
-                heading_style
-            )
-        )
-
-        elements.append(
-            build_table(
-                intel_data,
-                [170, 310],
-                header=True
-            )
-        )
-
-        # ==========================
-        # THREAT INTELLIGENCE SOURCES
-        # ==========================
+        elements.append(Paragraph("URL Threat Intelligence", heading_style))
+        elements.append(build_table(intel_data, [170, 310], header=True))
 
         sources = [
             ["Detection Source", "Result"],
-            [
-                "Google Safe Browsing",
-                "DETECTED" if intel.get("google_safe_browsing") else "NOT DETECTED"
-            ],
-            [
-                "OpenPhish",
-                "DETECTED" if intel.get("openphish_hit") else "NOT DETECTED"
-            ],
-            [
-                "Page Content Analysis",
-                "DETECTED" if int(intel.get("page_content_score") or 0) > 0 else "NO SIGNALS"
-            ],
-            [
-                "WHOIS Intelligence",
-                "AVAILABLE" if int(intel.get("domain_age_days") or 0) > 0 else "UNAVAILABLE"
-            ],
-            [
-                "MalGuard AI Engine",
-                "ACTIVE"
-            ]
+            ["Google Safe Browsing", "DETECTED" if intel.get("google_safe_browsing") else "NOT DETECTED"],
+            ["OpenPhish", "DETECTED" if intel.get("openphish_hit") else "NOT DETECTED"],
+            ["Page Content Analysis", "DETECTED" if int(intel.get("page_content_score") or 0) > 0 else "NO SIGNALS"],
+            ["WHOIS Intelligence", "AVAILABLE" if int(intel.get("domain_age_days") or 0) > 0 else "UNAVAILABLE"],
+            ["MalGuard AI Engine", "ACTIVE"]
         ]
 
-        elements.append(
-            Paragraph(
-                "Threat Intelligence Sources",
-                heading_style
-            )
-        )
-
-        elements.append(
-            build_table(
-                sources,
-                [220, 260],
-                header=True
-            )
-        )
-
-    # ==========================
-    # RISK VISUALIZATION
-    # ==========================
+        elements.append(Paragraph("Threat Intelligence Sources", heading_style))
+        elements.append(build_table(sources, [220, 260], header=True))
 
     try:
         score_num = int(float(risk_score))
-
     except Exception:
         score_num = 0
 
-    elements.append(
-        Paragraph(
-            "Risk Visualization",
-            heading_style
-        )
-    )
+    elements.append(Paragraph("Risk Visualization", heading_style))
+    elements.append(create_risk_meter(score_num, threat_level, normal_style))
 
-    elements.append(
-        create_risk_meter(
-            score_num,
-            threat_level,
-            normal_style
-        )
-    )
-
-    # ==========================
-    # TECHNICAL ANALYSIS
-    # ==========================
-
-    elements.append(
-        Paragraph(
-            "Technical Analysis",
-            heading_style
-        )
-    )
-
+    elements.append(Paragraph("Technical Analysis", heading_style))
     elements.append(
         Paragraph(
             safe(data.get("explanation")),
@@ -673,16 +564,7 @@ def generate_pdf_report(data):
         )
     )
 
-    # ==========================
-    # FINAL RECOMMENDATION BANNER
-    # ==========================
-
-    elements.append(
-        Paragraph(
-            "Final Analyst Recommendation",
-            heading_style
-        )
-    )
+    elements.append(Paragraph("Final Analyst Recommendation", heading_style))
 
     recommendation_banner = Table(
         [[
@@ -706,27 +588,13 @@ def generate_pdf_report(data):
 
     elements.append(recommendation_banner)
 
-    # ==========================
-    # RECOMMENDED ACTION
-    # ==========================
-
-    elements.append(
-        Paragraph(
-            "Recommended Action",
-            heading_style
-        )
-    )
-
+    elements.append(Paragraph("Recommended Action", heading_style))
     elements.append(
         Paragraph(
             safe(data.get("recommended_action")),
             normal_style
         )
     )
-
-    # ==========================
-    # MITRE
-    # ==========================
 
     paragraph_list(
         "MITRE ATT&CK Mapping",
@@ -735,10 +603,6 @@ def generate_pdf_report(data):
         heading_style,
         normal_style
     )
-
-    # ==========================
-    # FOOTER
-    # ==========================
 
     elements.append(Spacer(1, 20))
 
