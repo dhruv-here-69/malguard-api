@@ -9,10 +9,6 @@ from analysis.sandbox.sandbox_engine import simulate_file_behavior
 from analysis.intelligence.ai_engine import classify_threat
 
 
-# ==========================
-# CONFIG
-# ==========================
-
 RULES_FILE = os.path.join(
     os.path.dirname(__file__),
     "rules",
@@ -40,7 +36,11 @@ def extract_urls(path):
             content = f.read()
 
         text = content.decode(errors="ignore")
-        urls = re.findall(r'https?://[^\s\'"<>]+', text)
+
+        urls = re.findall(
+            r'https?://[^\s\'"<>]+',
+            text
+        )
 
         return list(set(urls))
 
@@ -52,17 +52,13 @@ def yara_scan(path):
     try:
         rules = yara.compile(filepath=RULES_FILE)
         matches = rules.match(path)
-        return [m.rule for m in matches]
+        return [match.rule for match in matches]
+
     except Exception:
         return []
 
 
-# ==========================
-# RESPONSE NORMALIZER
-# ==========================
-
 def build_response(file_type, sha256, risk_score, extra):
-
     if risk_score < 30:
         level = "LOW"
     elif risk_score < 60:
@@ -86,11 +82,9 @@ def build_response(file_type, sha256, risk_score, extra):
 # ==========================
 
 def analyze_generic_file(path):
-
     sha256 = calculate_sha256(path)
     urls = extract_urls(path)
     yara_matches = yara_scan(path)
-
     sandbox_result = simulate_file_behavior(path)
 
     ai_result = classify_threat(
@@ -124,7 +118,6 @@ def analyze_generic_file(path):
 # ==========================
 
 def analyze_apk(path):
-
     try:
         a, d, dx = AnalyzeAPK(path)
 
@@ -135,6 +128,7 @@ def analyze_apk(path):
 
         yara_matches = yara_scan(path)
         sandbox_result = simulate_file_behavior(path)
+        sha256 = calculate_sha256(path)
 
         dangerous_permissions = [
             "READ_SMS",
@@ -151,11 +145,14 @@ def analyze_apk(path):
             "BIND_ACCESSIBILITY_SERVICE"
         ]
 
-        found_permissions = [
-            d for p in permissions for d in dangerous_permissions if d in p
-        ]
+        found_permissions = []
 
-        sha256 = calculate_sha256(path)
+        for permission in permissions:
+            for danger in dangerous_permissions:
+                if danger in permission:
+                    found_permissions.append(danger)
+
+        found_permissions = list(set(found_permissions))
 
         ai_result = classify_threat(
             static={
@@ -200,9 +197,7 @@ def analyze_apk(path):
 # ==========================
 
 def analyze_exe(path):
-
     try:
-
         pe = pefile.PE(path)
 
         dlls = []
@@ -211,13 +206,16 @@ def analyze_exe(path):
 
         yara_matches = yara_scan(path)
         sandbox_result = simulate_file_behavior(path)
+        sha256 = calculate_sha256(path)
 
+        # Important:
+        # advapi32.dll, kernel32.dll, user32.dll, gdi32.dll and comctl32.dll
+        # are common in normal Windows apps, so they should NOT be treated as
+        # suspicious by themselves.
         suspicious_dlls = [
             "wininet.dll",
             "ws2_32.dll",
-            "urlmon.dll",
-            "crypt32.dll",
-            "advapi32.dll"
+            "urlmon.dll"
         ]
 
         suspicious_functions = [
@@ -237,9 +235,7 @@ def analyze_exe(path):
         ]
 
         if hasattr(pe, "DIRECTORY_ENTRY_IMPORT"):
-
             for entry in pe.DIRECTORY_ENTRY_IMPORT:
-
                 dll_name = entry.dll.decode(errors="ignore")
                 dlls.append(dll_name)
 
@@ -247,14 +243,14 @@ def analyze_exe(path):
                     suspicious_dlls_found.append(dll_name)
 
                 for imp in entry.imports:
-
                     if imp.name:
-                        fn = imp.name.decode(errors="ignore")
+                        function_name = imp.name.decode(errors="ignore")
 
-                        if fn in suspicious_functions:
-                            suspicious_functions_found.append(fn)
+                        if function_name in suspicious_functions:
+                            suspicious_functions_found.append(function_name)
 
-        sha256 = calculate_sha256(path)
+        suspicious_dlls_found = list(set(suspicious_dlls_found))
+        suspicious_functions_found = list(set(suspicious_functions_found))
 
         ai_result = classify_threat(
             static={
