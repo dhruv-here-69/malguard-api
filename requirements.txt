@@ -7,3 +7,4 @@ yara-python
 requests
 psutil
 python-whois
+beautifulsoup4
