@@ -53,6 +53,9 @@ SUSPICIOUS_TLDS = [
 ]
 
 
+OPENPHISH_FEED_URL = "https://openphish.com/feed.txt"
+
+
 def get_risk_level(score: int):
     if score < 30:
         return "LOW"
@@ -73,6 +76,15 @@ def normalize_url(url: str):
         url = "https://" + url
 
     return url
+
+
+def normalize_url_for_match(url: str):
+    normalized = normalize_url(url).strip().lower()
+
+    if normalized.endswith("/"):
+        normalized = normalized[:-1]
+
+    return normalized
 
 
 def is_ip_address(value: str):
@@ -202,6 +214,53 @@ def check_google_safe_browsing(url: str):
         }
 
 
+def check_openphish(url: str):
+    try:
+        target_url = normalize_url_for_match(url)
+
+        response = requests.get(
+            OPENPHISH_FEED_URL,
+            timeout=10,
+            headers={
+                "User-Agent": "Mozilla/5.0 MalGuardAI URL Scanner"
+            }
+        )
+
+        if response.status_code != 200:
+            return {
+                "enabled": True,
+                "openphish_hit": False,
+                "matched_url": None,
+                "error": f"OpenPhish feed returned HTTP {response.status_code}"
+            }
+
+        feed_urls = response.text.splitlines()
+
+        for feed_url in feed_urls:
+            clean_feed_url = normalize_url_for_match(feed_url)
+
+            if target_url == clean_feed_url:
+                return {
+                    "enabled": True,
+                    "openphish_hit": True,
+                    "matched_url": feed_url
+                }
+
+        return {
+            "enabled": True,
+            "openphish_hit": False,
+            "matched_url": None
+        }
+
+    except Exception as e:
+        return {
+            "enabled": True,
+            "openphish_hit": False,
+            "matched_url": None,
+            "error": str(e)
+        }
+
+
 def get_domain_age(domain: str):
     try:
         info = whois.whois(domain)
@@ -266,6 +325,7 @@ def analyze_url_safety(raw_url: str):
             ],
             "redirect_info": {},
             "safe_browsing": {},
+            "openphish": {},
             "whois": {},
             "recommendation": "Do not open this URL."
         }
@@ -287,6 +347,7 @@ def analyze_url_safety(raw_url: str):
             ],
             "redirect_info": {},
             "safe_browsing": {},
+            "openphish": {},
             "whois": {},
             "recommendation": "Do not open this URL."
         }
@@ -306,6 +367,7 @@ def analyze_url_safety(raw_url: str):
             ],
             "redirect_info": {},
             "safe_browsing": {},
+            "openphish": {},
             "whois": {},
             "recommendation": "Block this URL. Internal/private URL scanning is not allowed."
         }
@@ -424,17 +486,25 @@ def analyze_url_safety(raw_url: str):
         score += 60
         findings.append("Google Safe Browsing flagged this URL")
 
-    # If the domain does not resolve, avoid overclaiming confirmed maliciousness.
+    openphish = check_openphish(url)
+
+    if openphish.get("openphish_hit"):
+        score += 60
+        findings.append("OpenPhish flagged this URL")
+
+    threat_feed_confirmed = (
+        safe_browsing.get("safe_browsing_hit")
+        or openphish.get("openphish_hit")
+    )
+
     if not domain_is_resolvable and score >= 60:
         score = 50
         findings.append(
             "Risk capped because domain is unreachable; no live malicious content confirmed"
         )
 
-    # Critical should require external confirmation or internal/private infrastructure.
-    # Heuristics-only URLs can be HIGH, but should not become CRITICAL.
     if (
-        not safe_browsing.get("safe_browsing_hit")
+        not threat_feed_confirmed
         and score > 80
     ):
         score = 80
@@ -446,7 +516,7 @@ def analyze_url_safety(raw_url: str):
 
     risk_level = get_risk_level(score)
 
-    if safe_browsing.get("safe_browsing_hit"):
+    if threat_feed_confirmed:
         category = "Phishing URL"
 
     elif score >= 60:
@@ -490,6 +560,7 @@ def analyze_url_safety(raw_url: str):
         "findings": findings,
         "redirect_info": redirect_info,
         "safe_browsing": safe_browsing,
+        "openphish": openphish,
         "whois": whois_info,
         "recommendation": recommendation
     }
